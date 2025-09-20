@@ -87,8 +87,8 @@ class SecureAgent:
             # Register agent (this would normally require user authentication)
             # For now, we'll try to get a token directly
             auth_data = {
-                "agent_id": AGENT_ID
-                # agent_url removed - will use basic validation instead
+                "agent_id": AGENT_ID,
+                "agent_url": "https://github.com/pentorasec/agent-simple.py"  # Required for integrity verification
             }
             
             response = requests.post(
