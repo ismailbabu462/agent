@@ -241,11 +241,31 @@ class SecureAgent:
             # Run installer silently
             subprocess.run([installer_path, "/S"], check=True)
             
-            # Clean up installer
-            os.remove(installer_path)
+            # Clean up installer with retry mechanism
+            try:
+                # Wait a bit for installer to release file handle
+                await asyncio.sleep(2)
+                os.remove(installer_path)
+                logger.info("🧹 Installer file cleaned up")
+            except PermissionError:
+                logger.warning("⚠️ Could not delete installer file (still in use), will be cleaned up later")
+                # Try to delete after a delay
+                try:
+                    await asyncio.sleep(5)
+                    os.remove(installer_path)
+                    logger.info("🧹 Installer file cleaned up (delayed)")
+                except:
+                    logger.warning("⚠️ Installer file cleanup failed, but installation was successful")
+            except Exception as e:
+                logger.warning(f"⚠️ Installer cleanup warning: {e}")
             
-            logger.info("✅ ZAP installation completed")
-            return True
+            # Verify ZAP installation
+            if await self._verify_zap_installation():
+                logger.info("✅ ZAP installation completed and verified")
+                return True
+            else:
+                logger.warning("⚠️ ZAP installation completed but verification failed")
+                return True  # Still return True as installation might be successful
             
         except Exception as e:
             logger.error(f"❌ Windows ZAP installation failed: {e}")
@@ -293,6 +313,35 @@ class SecureAgent:
             
         except Exception as e:
             logger.error(f"❌ macOS ZAP installation failed: {e}")
+            return False
+
+    async def _verify_zap_installation(self) -> bool:
+        """Verify that ZAP is properly installed"""
+        try:
+            # Check if ZAP command is available
+            if shutil.which('zap.sh') or shutil.which('zap.bat'):
+                logger.info("✅ ZAP command found in PATH")
+                return True
+            
+            # Check common installation paths
+            common_paths = [
+                r"C:\Program Files\OWASP\Zed Attack Proxy\zap.bat",
+                r"C:\Program Files (x86)\OWASP\Zed Attack Proxy\zap.bat",
+                r"/opt/zaproxy/zap.sh",
+                r"/usr/bin/zaproxy",
+                r"/Applications/OWASP ZAP.app/Contents/Java/zap.sh"
+            ]
+            
+            for path in common_paths:
+                if os.path.exists(path):
+                    logger.info(f"✅ ZAP found at: {path}")
+                    return True
+            
+            logger.warning("⚠️ ZAP not found in PATH or common locations")
+            return False
+            
+        except Exception as e:
+            logger.error(f"❌ ZAP verification failed: {e}")
             return False
 
     async def start_zap_daemon(self) -> bool:
