@@ -327,6 +327,8 @@ class SecureAgent:
             common_paths = [
                 r"C:\Program Files\OWASP\Zed Attack Proxy\zap.bat",
                 r"C:\Program Files (x86)\OWASP\Zed Attack Proxy\zap.bat",
+                r"C:\Program Files\OWASP\Zed Attack Proxy\ZAP_2.16.1\zap.bat",
+                r"C:\Program Files (x86)\OWASP\Zed Attack Proxy\ZAP_2.16.1\zap.bat",
                 r"/opt/zaproxy/zap.sh",
                 r"/usr/bin/zaproxy",
                 r"/Applications/OWASP ZAP.app/Contents/Java/zap.sh"
@@ -344,6 +346,38 @@ class SecureAgent:
             logger.error(f"❌ ZAP verification failed: {e}")
             return False
 
+    def _find_zap_executable(self) -> Optional[str]:
+        """Find ZAP executable path"""
+        try:
+            # First check PATH
+            if shutil.which('zap.sh'):
+                return 'zap.sh'
+            if shutil.which('zap.bat'):
+                return 'zap.bat'
+            
+            # Check common installation paths
+            common_paths = [
+                r"C:\Program Files\OWASP\Zed Attack Proxy\zap.bat",
+                r"C:\Program Files (x86)\OWASP\Zed Attack Proxy\zap.bat",
+                r"C:\Program Files\OWASP\Zed Attack Proxy\ZAP_2.16.1\zap.bat",
+                r"C:\Program Files (x86)\OWASP\Zed Attack Proxy\ZAP_2.16.1\zap.bat",
+                r"/opt/zaproxy/zap.sh",
+                r"/usr/bin/zaproxy",
+                r"/Applications/OWASP ZAP.app/Contents/Java/zap.sh"
+            ]
+            
+            for path in common_paths:
+                if os.path.exists(path):
+                    logger.info(f"✅ Found ZAP executable at: {path}")
+                    return path
+            
+            logger.warning("⚠️ ZAP executable not found in PATH or common locations")
+            return None
+            
+        except Exception as e:
+            logger.error(f"❌ Error finding ZAP executable: {e}")
+            return None
+
     async def start_zap_daemon(self) -> bool:
         """Start ZAP daemon process"""
         try:
@@ -360,8 +394,13 @@ class SecureAgent:
                     logger.error("❌ ZAP installation failed. Please install OWASP ZAP manually")
                     return False
             
-            # Start ZAP daemon (Windows uses zap.bat, Linux/Mac use zap.sh)
-            zap_command = 'zap.bat' if platform.system().lower() == 'windows' else 'zap.sh'
+            # Find ZAP executable
+            zap_command = self._find_zap_executable()
+            if not zap_command:
+                logger.error("❌ ZAP executable not found")
+                return False
+            
+            logger.info(f"🚀 Starting ZAP daemon with: {zap_command}")
             self.zap_process = subprocess.Popen([
                 zap_command, '-daemon', '-port', '8080', '-config', 'api.key='
             ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
