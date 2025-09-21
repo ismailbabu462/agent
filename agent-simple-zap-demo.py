@@ -339,6 +339,30 @@ class SecureAgent:
                     logger.info(f"✅ ZAP found at: {path}")
                     return True
             
+            # Try to find ZAP in Program Files directories
+            logger.info("🔍 Searching for ZAP in Program Files...")
+            program_files_paths = [
+                r"C:\Program Files",
+                r"C:\Program Files (x86)"
+            ]
+            
+            for pf_path in program_files_paths:
+                if os.path.exists(pf_path):
+                    try:
+                        for item in os.listdir(pf_path):
+                            if "owasp" in item.lower() or "zap" in item.lower():
+                                zap_dir = os.path.join(pf_path, item)
+                                if os.path.isdir(zap_dir):
+                                    logger.info(f"🔍 Found potential ZAP directory: {zap_dir}")
+                                    # Look for zap.bat in this directory and subdirectories
+                                    for root, dirs, files in os.walk(zap_dir):
+                                        if "zap.bat" in files:
+                                            zap_path = os.path.join(root, "zap.bat")
+                                            logger.info(f"✅ ZAP found at: {zap_path}")
+                                            return True
+                    except Exception as e:
+                        logger.warning(f"⚠️ Error searching in {pf_path}: {e}")
+            
             logger.warning("⚠️ ZAP not found in PATH or common locations")
             return False
             
@@ -361,6 +385,10 @@ class SecureAgent:
                 r"C:\Program Files (x86)\OWASP\Zed Attack Proxy\zap.bat",
                 r"C:\Program Files\OWASP\Zed Attack Proxy\ZAP_2.16.1\zap.bat",
                 r"C:\Program Files (x86)\OWASP\Zed Attack Proxy\ZAP_2.16.1\zap.bat",
+                r"C:\Program Files\OWASP\Zed Attack Proxy\ZAP_2.16.1\ZAP_2.16.1\zap.bat",
+                r"C:\Program Files (x86)\OWASP\Zed Attack Proxy\ZAP_2.16.1\ZAP_2.16.1\zap.bat",
+                r"C:\Program Files\OWASP\Zed Attack Proxy\ZAP_2.16.1\ZAP_2.16.1\ZAP_2.16.1\zap.bat",
+                r"C:\Program Files (x86)\OWASP\Zed Attack Proxy\ZAP_2.16.1\ZAP_2.16.1\ZAP_2.16.1\zap.bat",
                 r"/opt/zaproxy/zap.sh",
                 r"/usr/bin/zaproxy",
                 r"/Applications/OWASP ZAP.app/Contents/Java/zap.sh"
@@ -370,6 +398,30 @@ class SecureAgent:
                 if os.path.exists(path):
                     logger.info(f"✅ Found ZAP executable at: {path}")
                     return path
+            
+            # Try to find ZAP in Program Files directories
+            logger.info("🔍 Searching for ZAP in Program Files...")
+            program_files_paths = [
+                r"C:\Program Files",
+                r"C:\Program Files (x86)"
+            ]
+            
+            for pf_path in program_files_paths:
+                if os.path.exists(pf_path):
+                    try:
+                        for item in os.listdir(pf_path):
+                            if "owasp" in item.lower() or "zap" in item.lower():
+                                zap_dir = os.path.join(pf_path, item)
+                                if os.path.isdir(zap_dir):
+                                    logger.info(f"🔍 Found potential ZAP directory: {zap_dir}")
+                                    # Look for zap.bat in this directory and subdirectories
+                                    for root, dirs, files in os.walk(zap_dir):
+                                        if "zap.bat" in files:
+                                            zap_path = os.path.join(root, "zap.bat")
+                                            logger.info(f"✅ Found ZAP executable at: {zap_path}")
+                                            return zap_path
+                    except Exception as e:
+                        logger.warning(f"⚠️ Error searching in {pf_path}: {e}")
             
             logger.warning("⚠️ ZAP executable not found in PATH or common locations")
             return None
