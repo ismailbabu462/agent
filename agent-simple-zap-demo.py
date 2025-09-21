@@ -203,8 +203,35 @@ class SecureAgent:
         try:
             logger.info("📥 Installing ZAP for Windows...")
             
-            # Download ZAP Windows installer
-            zap_url = "https://github.com/zaproxy/zaproxy/releases/latest/download/ZAP_2.14.0_windows.exe"
+            # Get latest ZAP release info from GitHub API
+            try:
+                response = requests.get("https://api.github.com/repos/zaproxy/zaproxy/releases/latest", timeout=10)
+                if response.status_code == 200:
+                    release_data = response.json()
+                    # Find Windows installer asset
+                    windows_asset = None
+                    for asset in release_data.get('assets', []):
+                        if 'windows' in asset['name'].lower() and asset['name'].endswith('.exe'):
+                            windows_asset = asset
+                            break
+                    
+                    if windows_asset:
+                        zap_url = windows_asset['browser_download_url']
+                        logger.info(f"📥 Found latest ZAP release: {release_data['tag_name']}")
+                    else:
+                        # Fallback to known working URL
+                        zap_url = "https://github.com/zaproxy/zaproxy/releases/download/v2.14.0/ZAP_2.14.0_windows.exe"
+                        logger.info("📥 Using fallback ZAP URL")
+                else:
+                    # Fallback to known working URL
+                    zap_url = "https://github.com/zaproxy/zaproxy/releases/download/v2.14.0/ZAP_2.14.0_windows.exe"
+                    logger.info("📥 Using fallback ZAP URL")
+            except Exception as e:
+                logger.warning(f"⚠️ Could not fetch latest release info: {e}")
+                # Fallback to known working URL
+                zap_url = "https://github.com/zaproxy/zaproxy/releases/download/v2.14.0/ZAP_2.14.0_windows.exe"
+                logger.info("📥 Using fallback ZAP URL")
+            
             installer_path = os.path.join(tempfile.gettempdir(), "ZAP_installer.exe")
             
             logger.info(f"📥 Downloading ZAP installer from {zap_url}")
