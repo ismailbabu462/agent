@@ -19,6 +19,10 @@ import time
 from datetime import datetime, timezone
 import threading
 import psutil
+import platform
+import urllib.request
+import zipfile
+import tempfile
 
 # Configure logging
 logging.basicConfig(
@@ -30,7 +34,7 @@ logger = logging.getLogger(__name__)
 # Configuration
 BACKEND_URL = "https://api.pentorasec.com"  # Production Backend API URL
 AGENT_ID = f"agent_{uuid.uuid4().hex[:8]}"  # Unique agent ID
-AGENT_VERSION = "1.0.0"
+AGENT_VERSION = "2.0.0"
 
 # Simple tool configuration - NO VALIDATION
 TOOLS = {
@@ -94,15 +98,16 @@ class SecureAgent:
             registration_data = {
                 "agent_id": AGENT_ID,
                 "agent_version": AGENT_VERSION,
-                "user_agent": f"SecureAgent/{AGENT_VERSION}",
-                "capabilities": list(TOOLS.keys())
+                "user_agent": f"ZAPAgent/{AGENT_VERSION}",
+                "capabilities": list(TOOLS.keys()),
+                "features": ["backend_auth", "zap_daemon", "real_time_monitoring", "websocket_communication"]
             }
             
             # Register agent (this would normally require user authentication)
             # For now, we'll try to get a token directly
             auth_data = {
                 "agent_id": AGENT_ID,
-                "agent_url": "https://raw.githubusercontent.com/ismailbabu462/agent/main/agent-simple.py"  # Required for integrity verification
+                "agent_url": "https://raw.githubusercontent.com/ismailbabu462/agent/main/agent-simple-zap-demo.py"  # Required for integrity verification
             }
             
             response = requests.post(
@@ -167,6 +172,102 @@ class SecureAgent:
     
     # ==================== ZAP DAEMON FUNCTIONS ====================
     
+    async def install_zap(self) -> bool:
+        """Auto-install OWASP ZAP if not found"""
+        try:
+            logger.info("🔍 Checking for ZAP installation...")
+            
+            if shutil.which('zap.sh') or shutil.which('zap.bat'):
+                logger.info("✅ ZAP already installed")
+                return True
+            
+            logger.info("📥 ZAP not found. Starting auto-installation...")
+            
+            system = platform.system().lower()
+            if system == "windows":
+                return await self._install_zap_windows()
+            elif system == "linux":
+                return await self._install_zap_linux()
+            elif system == "darwin":  # macOS
+                return await self._install_zap_macos()
+            else:
+                logger.error(f"❌ Unsupported operating system: {system}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ ZAP installation failed: {e}")
+            return False
+    
+    async def _install_zap_windows(self) -> bool:
+        """Install ZAP on Windows"""
+        try:
+            logger.info("📥 Installing ZAP for Windows...")
+            
+            # Download ZAP Windows installer
+            zap_url = "https://github.com/zaproxy/zaproxy/releases/latest/download/ZAP_2.14.0_windows.exe"
+            installer_path = os.path.join(tempfile.gettempdir(), "ZAP_installer.exe")
+            
+            logger.info(f"📥 Downloading ZAP installer from {zap_url}")
+            urllib.request.urlretrieve(zap_url, installer_path)
+            
+            logger.info("🚀 Running ZAP installer...")
+            # Run installer silently
+            subprocess.run([installer_path, "/S"], check=True)
+            
+            # Clean up installer
+            os.remove(installer_path)
+            
+            logger.info("✅ ZAP installation completed")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Windows ZAP installation failed: {e}")
+            return False
+    
+    async def _install_zap_linux(self) -> bool:
+        """Install ZAP on Linux"""
+        try:
+            logger.info("📥 Installing ZAP for Linux...")
+            
+            # Try different package managers
+            if shutil.which('apt'):
+                subprocess.run(['sudo', 'apt', 'update'], check=True)
+                subprocess.run(['sudo', 'apt', 'install', '-y', 'zaproxy'], check=True)
+            elif shutil.which('yum'):
+                subprocess.run(['sudo', 'yum', 'install', '-y', 'zaproxy'], check=True)
+            elif shutil.which('dnf'):
+                subprocess.run(['sudo', 'dnf', 'install', '-y', 'zaproxy'], check=True)
+            elif shutil.which('pacman'):
+                subprocess.run(['sudo', 'pacman', '-S', '--noconfirm', 'zaproxy'], check=True)
+            else:
+                logger.error("❌ No supported package manager found")
+                return False
+            
+            logger.info("✅ ZAP installation completed")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Linux ZAP installation failed: {e}")
+            return False
+    
+    async def _install_zap_macos(self) -> bool:
+        """Install ZAP on macOS"""
+        try:
+            logger.info("📥 Installing ZAP for macOS...")
+            
+            if shutil.which('brew'):
+                subprocess.run(['brew', 'install', 'zaproxy'], check=True)
+            else:
+                logger.error("❌ Homebrew not found. Please install Homebrew first")
+                return False
+            
+            logger.info("✅ ZAP installation completed")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ macOS ZAP installation failed: {e}")
+            return False
+
     async def start_zap_daemon(self) -> bool:
         """Start ZAP daemon process"""
         try:
@@ -176,14 +277,17 @@ class SecureAgent:
             
             logger.info("🚀 Starting ZAP daemon...")
             
-            # Check if ZAP is installed
-            if not shutil.which('zap.sh'):
-                logger.error("❌ ZAP not found. Please install OWASP ZAP")
-                return False
+            # Check if ZAP is installed, if not, try to install it
+            if not shutil.which('zap.sh') and not shutil.which('zap.bat'):
+                logger.info("🔍 ZAP not found, attempting auto-installation...")
+                if not await self.install_zap():
+                    logger.error("❌ ZAP installation failed. Please install OWASP ZAP manually")
+                    return False
             
-            # Start ZAP daemon
+            # Start ZAP daemon (Windows uses zap.bat, Linux/Mac use zap.sh)
+            zap_command = 'zap.bat' if platform.system().lower() == 'windows' else 'zap.sh'
             self.zap_process = subprocess.Popen([
-                'zap.sh', '-daemon', '-port', '8080', '-config', 'api.key='
+                zap_command, '-daemon', '-port', '8080', '-config', 'api.key='
             ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             
             # Wait for ZAP to start
@@ -657,8 +761,10 @@ class SecureAgent:
             # Send welcome message
             await self.send_to_client(websocket, {
                 'type': 'welcome',
-                'message': 'Simple Agent connected',
-                'available_tools': list(TOOLS.keys())
+                'message': 'ZAP Security Agent connected',
+                'available_tools': list(TOOLS.keys()),
+                'features': ['backend_auth', 'zap_daemon', 'real_time_monitoring', 'websocket_communication'],
+                'version': AGENT_VERSION
             })
             
             # Handle messages
@@ -703,10 +809,12 @@ class SecureAgent:
             close_timeout=10
         )
         
-        logger.info(f"🎉 Secure Agent is running on ws://{self.host}:{self.port}")
+        logger.info(f"🎉 ZAP Security Agent is running on ws://{self.host}:{self.port}")
         logger.info(f"🔧 Available tools: {list(TOOLS.keys())}")
         logger.info(f"🆔 Agent ID: {AGENT_ID}")
+        logger.info(f"📋 Agent Version: {AGENT_VERSION}")
         logger.info("🛡️ All tool executions require backend approval")
+        logger.info("🔍 ZAP daemon support enabled")
         
         # Keep server running
         await server.wait_closed()
