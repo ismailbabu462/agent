@@ -19,6 +19,8 @@ import time
 from datetime import datetime, timezone
 import threading
 import psutil
+import platform
+from pathlib import Path
 
 # Configure logging
 logging.basicConfig(
@@ -64,6 +66,209 @@ TOOLS = {
     }
 }
 
+class ZAPManager:
+    """OWASP ZAP sürecini yöneten sınıf"""
+    
+    def __init__(self, port: int = 8787, api_key: str = "BIZIM_GUVENLI_ANAHTARIMIZ"):
+        self.port = port
+        self.api_key = api_key
+        self.zap_process: Optional[subprocess.Popen] = None
+        self.zap_executable: Optional[str] = None
+        self.api_url = f"http://127.0.0.1:{port}"
+        
+        # ZAP executable'ını bul
+        self.zap_executable = self._find_zap_executable()
+        if not self.zap_executable:
+            logger.error("❌ ZAP executable not found in agent bundle")
+            raise FileNotFoundError("ZAP executable not found in agent bundle")
+        
+        logger.info(f"✅ ZAP Manager initialized - Port: {port}")
+    
+    def _find_zap_executable(self) -> Optional[str]:
+        """Agent'ın kendi içindeki zap/ klasöründen ZAP executable'ını bul"""
+        try:
+            agent_dir = Path(__file__).parent.absolute()
+            zap_dir = agent_dir / "zap"
+            
+            if not zap_dir.exists():
+                logger.error(f"❌ ZAP directory not found: {zap_dir}")
+                return None
+            
+            system = platform.system().lower()
+            
+            if system == "windows":
+                zap_bat = zap_dir / "zap.bat"
+                if zap_bat.exists():
+                    return str(zap_bat)
+            elif system in ["linux", "darwin"]:
+                zap_sh = zap_dir / "zap.sh"
+                if zap_sh.exists():
+                    os.chmod(zap_sh, 0o755)
+                    return str(zap_sh)
+            
+            return None
+        except Exception as e:
+            logger.error(f"❌ Error finding ZAP executable: {e}")
+            return None
+    
+    def start(self) -> bool:
+        """ZAP'ı daemon modunda başlat"""
+        try:
+            if self.is_running():
+                logger.info("🔄 ZAP is already running")
+                return True
+            
+            logger.info(f"🚀 Starting ZAP daemon on port {self.port}...")
+            
+            cmd = [
+                self.zap_executable,
+                "-daemon",
+                f"-port", str(self.port),
+                "-config", f"api.key={self.api_key}",
+                "-config", "api.disablekey=false"
+            ]
+            
+            self.zap_process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                cwd=os.path.dirname(self.zap_executable)
+            )
+            
+            logger.info(f"✅ ZAP process started with PID: {self.zap_process.pid}")
+            
+            # ZAP'ın başlamasını bekle
+            for i in range(30):
+                time.sleep(1)
+                if self.is_running():
+                    logger.info(f"✅ ZAP started successfully after {i+1} seconds")
+                    return True
+            
+            logger.error("❌ ZAP failed to start within 30 seconds")
+            return False
+            
+        except Exception as e:
+            logger.error(f"❌ Error starting ZAP: {e}")
+            return False
+    
+    def stop(self) -> bool:
+        """Çalışan ZAP sürecini sonlandır"""
+        try:
+            if not self.zap_process:
+                return True
+            
+            logger.info("🛑 Stopping ZAP daemon...")
+            
+            if self.zap_process.poll() is None:
+                self.zap_process.terminate()
+                time.sleep(2)
+                if self.zap_process.poll() is None:
+                    self.zap_process.kill()
+            
+            # Process tree'yi temizle
+            try:
+                if self.zap_process.pid:
+                    parent = psutil.Process(self.zap_process.pid)
+                    children = parent.children(recursive=True)
+                    for child in children:
+                        child.terminate()
+                    psutil.wait_procs(children, timeout=3)
+            except:
+                pass
+            
+            self.zap_process = None
+            logger.info("✅ ZAP daemon stopped")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Error stopping ZAP: {e}")
+            return False
+    
+    def is_running(self) -> bool:
+        """ZAP'ın çalışıp çalışmadığını kontrol et"""
+        try:
+            endpoints = [
+                f"{self.api_url}/JSON/core/view/version/",
+                f"{self.api_url}/JSON/core/view/version",
+                f"{self.api_url}/JSON/core/view/",
+                f"{self.api_url}/"
+            ]
+            
+            for endpoint in endpoints:
+                try:
+                    response = requests.get(
+                        f"{endpoint}?apikey={self.api_key}",
+                        timeout=3
+                    )
+                    if response.status_code == 200:
+                        return True
+                    
+                    response = requests.get(endpoint, timeout=3)
+                    if response.status_code == 200:
+                        return True
+                except:
+                    continue
+            
+            return False
+        except:
+            return False
+    
+    def get_status(self) -> Dict[str, Any]:
+        """ZAP durumunu al"""
+        try:
+            if not self.is_running():
+                return {
+                    "running": False,
+                    "port": self.port,
+                    "api_url": self.api_url,
+                    "error": "ZAP is not running"
+                }
+            
+            return {
+                "running": True,
+                "port": self.port,
+                "api_url": self.api_url,
+                "pid": self.zap_process.pid if self.zap_process else None
+            }
+        except Exception as e:
+            return {
+                "running": False,
+                "port": self.port,
+                "api_url": self.api_url,
+                "error": str(e)
+            }
+    
+    def send_command(self, endpoint: str, params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """ZAP API'ına komut gönder"""
+        try:
+            if not self.is_running():
+                return {"error": "ZAP is not running"}
+            
+            url = f"{self.api_url}{endpoint}"
+            if params is None:
+                params = {}
+            params["apikey"] = self.api_key
+            
+            response = requests.get(url, params=params, timeout=10)
+            
+            if response.status_code == 200:
+                return response.json()
+            else:
+                return {
+                    "error": f"HTTP {response.status_code}",
+                    "response": response.text
+                }
+        except Exception as e:
+            return {"error": str(e)}
+    
+    def __del__(self):
+        """Destructor - ZAP'ı temizle"""
+        try:
+            self.stop()
+        except:
+            pass
+
 class SecureAgent:
     """Secure Agent - Must authenticate with backend before operations"""
     
@@ -77,13 +282,16 @@ class SecureAgent:
         self.is_authenticated = False
         self.backend_websocket = None
         
-        # ZAP Daemon properties
-        self.zap_process = None
-        self.zap_api_url = "http://127.0.0.1:8080"
-        self.zap_api_key = None
+        # ZAP Manager - Bundled ZAP management
+        self.zap_manager = None
+        self.zap_api_url = "http://127.0.0.1:8787"
+        self.zap_api_key = "BIZIM_GUVENLI_ANAHTARIMIZ"
         self.zap_targets = []
         self.zap_scanning = False
         self.zap_monitoring_task = None
+        
+        # Legacy ZAP properties (for compatibility)
+        self.zap_process = None
         
     async def authenticate_with_backend(self) -> bool:
         """Authenticate with backend - REQUIRED before any operations"""
@@ -168,33 +376,36 @@ class SecureAgent:
     # ==================== ZAP DAEMON FUNCTIONS ====================
     
     async def start_zap_daemon(self) -> bool:
-        """Start ZAP daemon process"""
+        """Start ZAP daemon process using bundled ZAP Manager"""
         try:
-            if self.zap_process and self.zap_process.poll() is None:
-                logger.info("🔄 ZAP daemon already running")
+            logger.info("🚀 Starting bundled ZAP daemon...")
+            
+            # Initialize ZAP Manager
+            if not self.zap_manager:
+                try:
+                    self.zap_manager = ZAPManager(
+                        port=8787,  # Use custom ZAP port
+                        api_key=self.zap_api_key
+                    )
+                    logger.info("✅ ZAP Manager initialized")
+                except Exception as e:
+                    logger.error(f"❌ Failed to initialize ZAP Manager: {e}")
+                    return False
+            
+            # Check if ZAP is already running
+            if self.zap_manager.is_running():
+                logger.info("✅ ZAP is already running")
+                self.zap_api_url = self.zap_manager.api_url
                 return True
             
-            logger.info("🚀 Starting ZAP daemon...")
-            
-            # Check if ZAP is installed
-            if not shutil.which('zap.sh'):
-                logger.error("❌ ZAP not found. Please install OWASP ZAP")
-                return False
-            
-            # Start ZAP daemon
-            self.zap_process = subprocess.Popen([
-                'zap.sh', '-daemon', '-port', '8080', '-config', 'api.key='
-            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            
-            # Wait for ZAP to start
-            await asyncio.sleep(10)
-            
-            # Test ZAP API connection
-            if await self.test_zap_connection():
-                logger.info("✅ ZAP daemon started successfully")
+            # Start ZAP using ZAP Manager
+            logger.info("🚀 Starting ZAP using ZAP Manager...")
+            if self.zap_manager.start():
+                logger.info("✅ ZAP started successfully")
+                self.zap_api_url = self.zap_manager.api_url
                 return True
             else:
-                logger.error("❌ ZAP daemon failed to start")
+                logger.error("❌ Failed to start ZAP using ZAP Manager")
                 return False
                 
         except Exception as e:
@@ -212,14 +423,43 @@ class SecureAgent:
     async def stop_zap_daemon(self):
         """Stop ZAP daemon process"""
         try:
+            # Stop ZAP using ZAP Manager
+            if self.zap_manager:
+                logger.info("🛑 Stopping ZAP daemon using ZAP Manager...")
+                if self.zap_manager.stop():
+                    logger.info("✅ ZAP daemon stopped via ZAP Manager")
+                else:
+                    logger.warning("⚠️ Failed to stop ZAP via ZAP Manager")
+            
+            # Legacy ZAP process cleanup
             if self.zap_process:
-                logger.info("🛑 Stopping ZAP daemon...")
+                logger.info("🛑 Stopping legacy ZAP daemon...")
                 self.zap_process.terminate()
                 self.zap_process.wait(timeout=10)
                 self.zap_process = None
-                logger.info("✅ ZAP daemon stopped")
+                logger.info("✅ Legacy ZAP daemon stopped")
+                
         except Exception as e:
             logger.error(f"❌ Error stopping ZAP daemon: {e}")
+    
+    def send_zap_command(self, endpoint: str, params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        ZAP API'ına komut gönder
+        
+        Args:
+            endpoint: API endpoint'i
+            params: Ek parametreler
+            
+        Returns:
+            API yanıtı
+        """
+        try:
+            if self.zap_manager:
+                return self.zap_manager.send_command(endpoint, params)
+            else:
+                return {"error": "ZAP Manager not initialized"}
+        except Exception as e:
+            return {"error": str(e)}
     
     async def add_zap_target(self, target: str) -> bool:
         """Add target to ZAP scanning list"""
