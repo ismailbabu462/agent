@@ -526,6 +526,66 @@ class DesktopAgent:
         """Check if a tool is available in PATH"""
         return shutil.which(tool_name) is not None
     
+    async def add_tool_to_path(self, tool_name: str, websocket) -> bool:
+        """Try to find and add tool to PATH"""
+        import platform
+        
+        common_paths = []
+        
+        if platform.system() == "Windows":
+            common_paths = [
+                os.path.expanduser("~\\go\\bin"),
+                "C:\\Program Files\\Go\\bin",
+                os.path.expanduser("~\\AppData\\Local\\Programs\\Python\\Python*\\Scripts"),
+                "C:\\tools",
+            ]
+        else:  # Linux/macOS
+            common_paths = [
+                os.path.expanduser("~/go/bin"),
+                "/usr/local/go/bin",
+                os.path.expanduser("~/.local/bin"),
+                "/usr/local/bin",
+                "/opt/homebrew/bin",
+                "/usr/bin",
+                os.path.expanduser("~/.cargo/bin"),
+            ]
+        
+        # Try to find the tool in common paths
+        for path in common_paths:
+            # Expand wildcards for Windows
+            if '*' in path:
+                import glob
+                expanded_paths = glob.glob(path)
+                for exp_path in expanded_paths:
+                    tool_path = os.path.join(exp_path, tool_name)
+                    if platform.system() == "Windows":
+                        tool_path += ".exe"
+                    if os.path.isfile(tool_path):
+                        # Add to current process PATH
+                        os.environ['PATH'] = f"{exp_path}{os.pathsep}{os.environ['PATH']}"
+                        await self.send_to_client(websocket, {
+                            'type': 'output',
+                            'tool': tool_name,
+                            'line': f'✅ Found {tool_name} at {exp_path} and added to PATH'
+                        })
+                        return True
+            else:
+                if os.path.isdir(path):
+                    tool_path = os.path.join(path, tool_name)
+                    if platform.system() == "Windows":
+                        tool_path += ".exe"
+                    if os.path.isfile(tool_path):
+                        # Add to current process PATH
+                        os.environ['PATH'] = f"{path}{os.pathsep}{os.environ['PATH']}"
+                        await self.send_to_client(websocket, {
+                            'type': 'output',
+                            'tool': tool_name,
+                            'line': f'✅ Found {tool_name} at {path} and added to PATH'
+                        })
+                        return True
+        
+        return False
+    
     async def install_tool(self, tool_name: str, websocket) -> bool:
         """Try to install a tool using multiple methods"""
         if tool_name not in TOOL_INSTALLATION:
@@ -614,11 +674,23 @@ class DesktopAgent:
                     if self.is_tool_available(tool_name):
                         return True
                     else:
+                        # Try to add common paths
                         await self.send_to_client(websocket, {
                             'type': 'output',
                             'tool': tool_name,
-                            'line': f'⚠️ {tool_name} installed but not found in PATH'
+                            'line': f'⚠️ {tool_name} installed but not found in PATH, trying common locations...'
                         })
+                        
+                        # Try to find and add to PATH
+                        if await self.add_tool_to_path(tool_name, websocket):
+                            return True
+                        
+                        await self.send_to_client(websocket, {
+                            'type': 'output',
+                            'tool': tool_name,
+                            'line': f'ℹ️ {tool_name} installed successfully. You may need to restart your terminal or add it to PATH manually.'
+                        })
+                        return True  # Consider it successful even if not in current PATH
                 else:
                     error_msg = stderr.decode('utf-8', errors='ignore').strip()
                     await self.send_to_client(websocket, {
