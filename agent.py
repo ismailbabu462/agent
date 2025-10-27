@@ -425,6 +425,25 @@ class DesktopAgent:
                 return_exceptions=True
             )
             
+    def validate_input(self, input_data: str) -> bool:
+        """SOC2 Compliant Input Validation - Required by backend"""
+        return self.validate_target(input_data)
+    
+    def sanitize_output(self, output: str) -> str:
+        """SOC2 Compliant Output Sanitization - Required by backend"""
+        if not output:
+            return ""
+        
+        # Remove control characters except newlines and tabs
+        sanitized = ''.join(char for char in output if char.isprintable() or char in '\n\t')
+        
+        # Limit output size
+        max_size = SECURITY_CONFIG.get('max_output_size', 10 * 1024 * 1024)
+        if len(sanitized) > max_size:
+            sanitized = sanitized[:max_size] + "\n[Output truncated - size limit exceeded]"
+        
+        return sanitized
+    
     def validate_target(self, target: str) -> bool:
         """Validate target input for security - SECURITY ENHANCED"""
         # Basic validation
