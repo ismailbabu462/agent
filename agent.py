@@ -12,13 +12,14 @@ import logging
 import sys
 import os
 import shutil
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 import re
 import time
 from datetime import datetime, timezone
 import hashlib
 import secrets
 from collections import defaultdict, deque
+import aiohttp
 
 # SECURITY CONFIGURATION
 SECURITY_CONFIG = {
@@ -282,9 +283,10 @@ ALLOWED_TOOLS = {
 }
 
 class DesktopAgent:
-    def __init__(self, host='localhost', port=13337):
+    def __init__(self, host='localhost', port=13337, backend_url='http://localhost:8000'):
         self.host = host
         self.port = port
+        self.backend_url = backend_url
         self.clients = set()
         self.user_last_tool_run = {}  # Track last tool run time per user
         
@@ -296,6 +298,12 @@ class DesktopAgent:
         self.session_tokens = {}                         # websocket -> session token
         self.max_output_size = SECURITY_CONFIG['max_output_size']
         self.current_output_size = 0
+        
+        # SECURITY: Backend authentication
+        self.auth_token = None
+        self.is_authenticated = False
+        self.agent_id = None
+        self.client_tokens = {}  # websocket -> validated token
         
     def get_client_ip(self, websocket) -> str:
         """Get client IP address from websocket"""
@@ -347,6 +355,94 @@ class DesktopAgent:
     def validate_session_token(self, websocket, token: str) -> bool:
         """Validate session token"""
         return self.session_tokens.get(websocket) == token
+    
+    async def authenticate_with_backend(self) -> bool:
+        """
+        SECURITY: Authenticate this agent with the backend server
+        Backend will compare this agent's code with trusted_agent.py byte-by-byte
+        """
+        try:
+            # Generate unique agent ID
+            if not self.agent_id:
+                self.agent_id = hashlib.sha256(f"{self.host}:{self.port}:{time.time()}".encode()).hexdigest()[:16]
+            
+            # Read THIS agent's code file
+            agent_file_path = os.path.abspath(__file__)
+            with open(agent_file_path, 'r', encoding='utf-8') as f:
+                agent_code = f.read()
+            
+            logger.info(f"📤 Sending agent code to backend for verification (File: {agent_file_path})")
+            
+            # Request authentication from backend with agent's own code
+            async with aiohttp.ClientSession() as session:
+                auth_payload = {
+                    "agent_id": self.agent_id,
+                    "agent_code": agent_code,  # Lokal agent kodu
+                    "agent_file_path": agent_file_path
+                }
+                
+                async with session.post(
+                    f"{self.backend_url}/api/agent/auth",
+                    json=auth_payload,
+                    timeout=aiohttp.ClientTimeout(total=30)
+                ) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        self.auth_token = data.get('token')
+                        self.is_authenticated = True
+                        logger.info(f"✅ Agent authenticated with backend: {self.agent_id}")
+                        return True
+                    else:
+                        error_data = await response.json()
+                        logger.error(f"❌ Backend authentication failed: {error_data.get('detail', 'Unknown error')}")
+                        return False
+                        
+        except Exception as e:
+            logger.error(f"❌ Failed to authenticate with backend: {e}")
+            return False
+    
+    async def validate_client_token(self, token: str) -> Optional[Dict[str, Any]]:
+        """
+        SECURITY: Validate client token with backend
+        This ensures only authorized clients can connect
+        """
+        try:
+            async with aiohttp.ClientSession() as session:
+                headers = {"Authorization": f"Bearer {token}"}
+                
+                async with session.get(
+                    f"{self.backend_url}/api/auth/verify",
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=10)
+                ) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        return data
+                    else:
+                        return None
+                        
+        except Exception as e:
+            logger.error(f"Token validation failed: {e}")
+            return None
+    
+    async def connect_to_backend_websocket(self) -> bool:
+        """
+        SECURITY: Establish secure WebSocket connection to backend
+        This is required for agent monitoring and integrity checks
+        """
+        try:
+            if not self.is_authenticated:
+                logger.warning("Agent not authenticated. Call authenticate_with_backend() first.")
+                return False
+            
+            # WebSocket connection would be established here if needed
+            # For now, we'll keep the agent as a server and let backend poll for integrity
+            logger.info("Agent ready for backend connections")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Backend WebSocket connection failed: {e}")
+            return False
 
     async def register_client(self, websocket):
         """Register a new client connection with security checks"""
@@ -386,6 +482,7 @@ class DesktopAgent:
             # Cleanup security data
             self.client_ips.pop(websocket, None)
             self.session_tokens.pop(websocket, None)
+            self.client_tokens.pop(websocket, None)  # SECURITY: Cleanup client auth tokens
             
             logger.info(f"Client disconnected from {client_ip}. Total clients: {len(self.clients)}")
         
@@ -910,11 +1007,54 @@ class DesktopAgent:
             
             data = json.loads(message)
             
+            # SECURITY: Check if client is authenticated (except for auth message)
+            if data.get('type') != 'auth' and websocket not in self.client_tokens:
+                await self.send_to_client(websocket, {
+                    'type': 'error',
+                    'message': 'Authentication required. Send auth message first.'
+                })
+                return
+            
+            # Handle authentication
+            if data.get('type') == 'auth':
+                token = data.get('token')
+                if not token:
+                    await self.send_to_client(websocket, {
+                        'type': 'auth_failed',
+                        'message': 'Token required for authentication'
+                    })
+                    return
+                
+                # Validate token with backend
+                user_data = await self.validate_client_token(token)
+                if user_data:
+                    self.client_tokens[websocket] = {
+                        'token': token,
+                        'user_id': user_data.get('user_id'),
+                        'tier': user_data.get('tier', 'essential'),
+                        'authenticated_at': time.time()
+                    }
+                    await self.send_to_client(websocket, {
+                        'type': 'auth_success',
+                        'message': 'Client authenticated successfully',
+                        'tier': user_data.get('tier', 'essential')
+                    })
+                    logger.info(f"✅ Client authenticated: {user_data.get('user_id')}")
+                else:
+                    await self.send_to_client(websocket, {
+                        'type': 'auth_failed',
+                        'message': 'Invalid or expired token'
+                    })
+                return
+            
+            # Get authenticated client info
+            client_info = self.client_tokens.get(websocket, {})
+            user_id = client_info.get('user_id')
+            tier = client_info.get('tier', 'essential')
+            
             if data.get('type') == 'execute_tool':
                 tool = data.get('tool')
                 target = data.get('target')
-                user_id = data.get('user_id')
-                tier = data.get('tier', 'essential')
                 
                 if not tool or not target:
                     await self.send_to_client(websocket, {
@@ -1049,6 +1189,17 @@ class DesktopAgent:
         """Start the WebSocket server"""
         logger.info(f"Starting Desktop Agent on {self.host}:{self.port}")
         
+        # SECURITY: Authenticate with backend before starting
+        logger.info("🔐 Authenticating with backend...")
+        auth_success = await self.authenticate_with_backend()
+        
+        if not auth_success:
+            logger.error("❌ Backend authentication failed. Agent will not accept connections without authentication.")
+            logger.error("💡 Make sure the backend is running and accessible at: " + self.backend_url)
+            logger.warning("⚠️  Agent starting in limited mode (authentication required for all operations)")
+        else:
+            logger.info("✅ Backend authentication successful")
+        
         # Check if tools are available (will auto-install when needed)
         for tool_name, config in ALLOWED_TOOLS.items():
             if self.is_tool_available(tool_name):
@@ -1077,7 +1228,16 @@ class DesktopAgent:
 
 def main():
     """Main entry point"""
-    agent = DesktopAgent()
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='PentoraSec Desktop Agent')
+    parser.add_argument('--host', default='localhost', help='Host to bind to (default: localhost)')
+    parser.add_argument('--port', type=int, default=13337, help='Port to bind to (default: 13337)')
+    parser.add_argument('--backend', default='http://localhost:8000', help='Backend URL (default: http://localhost:8000)')
+    
+    args = parser.parse_args()
+    
+    agent = DesktopAgent(host=args.host, port=args.port, backend_url=args.backend)
     
     try:
         asyncio.run(agent.start_server())
