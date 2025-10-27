@@ -283,7 +283,7 @@ ALLOWED_TOOLS = {
 }
 
 class DesktopAgent:
-    def __init__(self, host='localhost', port=13337, backend_url='http://localhost:8000'):
+    def __init__(self, host='localhost', port=13337, backend_url='https://api.pentorasec.com'):
         self.host = host
         self.port = port
         self.backend_url = backend_url
@@ -1233,7 +1233,7 @@ def main():
     parser = argparse.ArgumentParser(description='PentoraSec Desktop Agent')
     parser.add_argument('--host', default='localhost', help='Host to bind to (default: localhost)')
     parser.add_argument('--port', type=int, default=13337, help='Port to bind to (default: 13337)')
-    parser.add_argument('--backend', default='http://localhost:8000', help='Backend URL (default: http://localhost:8000)')
+    parser.add_argument('--backend', default='https://api.pentorasec.com', help='Backend URL (default: https://api.pentorasec.com)')
     
     args = parser.parse_args()
     
