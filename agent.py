@@ -304,6 +304,8 @@ class DesktopAgent:
         self.is_authenticated = False
         self.agent_id = None
         self.client_tokens = {}  # websocket -> validated token
+        self.integrity_status = "unknown"  # unknown, verified, failed
+        self.integrity_message = ""
         
     def get_client_ip(self, websocket) -> str:
         """Get client IP address from websocket"""
@@ -390,11 +392,16 @@ class DesktopAgent:
                         data = await response.json()
                         self.auth_token = data.get('token')
                         self.is_authenticated = True
+                        self.integrity_status = "verified"
+                        self.integrity_message = "Agent code verified successfully"
                         logger.info(f"✅ Agent authenticated with backend: {self.agent_id}")
                         return True
                     else:
                         error_data = await response.json()
-                        logger.error(f"❌ Backend authentication failed: {error_data.get('detail', 'Unknown error')}")
+                        error_detail = error_data.get('detail', 'Unknown error')
+                        self.integrity_status = "failed"
+                        self.integrity_message = error_detail
+                        logger.error(f"❌ Backend authentication failed: {error_detail}")
                         return False
                         
         except Exception as e:
@@ -1124,6 +1131,15 @@ class DesktopAgent:
                 await self.send_to_client(websocket, {
                     'type': 'pong',
                     'timestamp': time.time()
+                })
+            
+            elif data.get('type') == 'integrity_check':
+                # Frontend integrity status sorgusu
+                await self.send_to_client(websocket, {
+                    'type': 'integrity_status',
+                    'status': self.integrity_status,
+                    'message': self.integrity_message,
+                    'is_authenticated': self.is_authenticated
                 })
                 
             else:
