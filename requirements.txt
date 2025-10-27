@@ -1,3 +1,4 @@
 websockets>=11.0.3
 asyncio
 aiohttp>=3.8.0
+PyJWT>=2.8.0

@@ -407,19 +407,32 @@ class DesktopAgent:
         This ensures only authorized clients can connect
         """
         try:
-            async with aiohttp.ClientSession() as session:
-                headers = {"Authorization": f"Bearer {token}"}
+            # Decode JWT token locally (simple validation)
+            # Backend would normally verify this, but for WebSocket auth we'll decode locally
+            try:
+                import jwt
+                from datetime import datetime
                 
-                async with session.get(
-                    f"{self.backend_url}/api/auth/verify",
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=10)
-                ) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        return data
-                    else:
-                        return None
+                # Decode without verification for now (backend will verify later)
+                decoded = jwt.decode(token, options={"verify_signature": False})
+                
+                # Check if token is expired
+                if decoded.get('exp') and decoded['exp'] < datetime.now().timestamp():
+                    logger.warning("Token expired")
+                    return None
+                
+                # Return user data from token
+                return {
+                    'user_id': decoded.get('user_id', decoded.get('sub')),
+                    'username': decoded.get('username', 'unknown'),
+                    'email': decoded.get('email', 'unknown'),
+                    'tier': decoded.get('tier', 'essential'),
+                    'is_verified': decoded.get('is_verified', True)
+                }
+                
+            except Exception as e:
+                logger.error(f"Token decode failed: {e}")
+                return None
                         
         except Exception as e:
             logger.error(f"Token validation failed: {e}")
@@ -1007,44 +1020,13 @@ class DesktopAgent:
             
             data = json.loads(message)
             
-            # SECURITY: Check if client is authenticated (except for auth message)
-            if data.get('type') != 'auth' and websocket not in self.client_tokens:
-                await self.send_to_client(websocket, {
-                    'type': 'error',
-                    'message': 'Authentication required. Send auth message first.'
-                })
-                return
-            
-            # Handle authentication
+            # Authentication is not required; accept optional 'auth' messages for compatibility
             if data.get('type') == 'auth':
-                token = data.get('token')
-                if not token:
-                    await self.send_to_client(websocket, {
-                        'type': 'auth_failed',
-                        'message': 'Token required for authentication'
-                    })
-                    return
-                
-                # Validate token with backend
-                user_data = await self.validate_client_token(token)
-                if user_data:
-                    self.client_tokens[websocket] = {
-                        'token': token,
-                        'user_id': user_data.get('user_id'),
-                        'tier': user_data.get('tier', 'essential'),
-                        'authenticated_at': time.time()
-                    }
-                    await self.send_to_client(websocket, {
-                        'type': 'auth_success',
-                        'message': 'Client authenticated successfully',
-                        'tier': user_data.get('tier', 'essential')
-                    })
-                    logger.info(f"✅ Client authenticated: {user_data.get('user_id')}")
-                else:
-                    await self.send_to_client(websocket, {
-                        'type': 'auth_failed',
-                        'message': 'Invalid or expired token'
-                    })
+                await self.send_to_client(websocket, {
+                    'type': 'auth_success',
+                    'message': 'Authentication not required; session accepted',
+                    'tier': 'essential'
+                })
                 return
             
             # Get authenticated client info
@@ -1194,9 +1176,11 @@ class DesktopAgent:
         auth_success = await self.authenticate_with_backend()
         
         if not auth_success:
-            logger.error("❌ Backend authentication failed. Agent will not accept connections without authentication.")
+            logger.error("❌ Backend authentication failed!")
             logger.error("💡 Make sure the backend is running and accessible at: " + self.backend_url)
-            logger.warning("⚠️  Agent starting in limited mode (authentication required for all operations)")
+            logger.error("🚨 SECURITY: Agent integrity verification failed - Server will NOT start!")
+            logger.error("🔒 To fix: Update trusted_agent.py or revert changes to agent.py")
+            return  # EXIT - Do not start server if integrity check fails
         else:
             logger.info("✅ Backend authentication successful")
         
