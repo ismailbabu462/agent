@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Desktop Agent for Pentest Suite
-WebSocket server that executes pentest tools locally on the user's machine.
+Desktop Agent www.pentorasec.com
+Author: ismail
+The comment lines are a mix of Turkish and English.
 """
 
 import asyncio
@@ -21,7 +22,7 @@ import secrets
 from collections import defaultdict, deque
 import aiohttp
 
-# SECURITY CONFIGURATION
+# RATE LİMİT SIKI DEĞİL, OLASI DoS SALDIRI İHTİMALİNE KARŞI BACKEND RATELİMİT (Defanse in Depth)
 SECURITY_CONFIG = {
     'max_message_size': 1024 * 1024,  # 1MB max message size
     'max_connections_per_ip': 5,      # Max connections per IP
@@ -42,7 +43,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Security: Don't log sensitive information
+# Security: PII Leak önlemek için
 class SecurityFilter(logging.Filter):
     def filter(self, record):
         # Remove sensitive data from logs
@@ -364,7 +365,7 @@ class DesktopAgent:
         Backend will compare this agent's code with trusted_agent.py byte-by-byte
         """
         try:
-            # Generate unique agent ID
+            # Generate unique agent ID -> Geçici olarak ID işe yaramıyor
             if not self.agent_id:
                 self.agent_id = hashlib.sha256(f"{self.host}:{self.port}:{time.time()}".encode()).hexdigest()[:16]
             
@@ -412,6 +413,7 @@ class DesktopAgent:
         """
         SECURITY: Validate client token with backend
         This ensures only authorized clients can connect
+        GÜVENLİK: Backend tarafından ek doğrulama eklenmelidir.
         """
         try:
             # Decode JWT token locally (simple validation)
@@ -567,7 +569,7 @@ class DesktopAgent:
         if not target or len(target) > 255:
             return False
             
-        # SECURITY: Check for dangerous characters and injection patterns
+        # SECURITY: Tehlikeli karakter önleme (Black List yetmez, Whitelist ve untrusted input kavramı anlaşılmalı)
         dangerous_chars = [
             ';', '&', '|', '`', '$', '(', ')', '<', '>', '"', "'", 
             '\\', '/', '..', '\x00', '\n', '\r', '\t',  # Path traversal, null bytes, control chars
@@ -575,7 +577,7 @@ class DesktopAgent:
             '~', '?', ':', ' ', '\x1b'  # Additional dangerous chars
         ]
         
-        # Check for dangerous patterns
+        # OWASP TOP:10 XSS, PATH TRAVERSAL BlackList
         dangerous_patterns = [
             r'\.\./',  # Path traversal
             r'\.\.\\',  # Windows path traversal
@@ -596,7 +598,7 @@ class DesktopAgent:
             if re.search(pattern, target, re.IGNORECASE):
                 return False
         
-        # SECURITY: Strict validation patterns
+        # SECURITY: Input/Prompt Injecion koruması
         # Domain pattern (more restrictive)
         domain_pattern = r'^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$'
         
@@ -743,7 +745,7 @@ class DesktopAgent:
                     'line': f'📦 Method {i}: Trying {" ".join(command)}'
                 })
                 
-                # SECURITY: Always use subprocess_exec to prevent shell injection
+                # SECURITY: RCE koruması
                 # Handle different command types safely
                 if '&&' in command:
                     # SECURITY: Split shell commands and execute separately
@@ -1215,7 +1217,7 @@ class DesktopAgent:
             ping_interval=30,
             ping_timeout=10,
             close_timeout=10,
-            # SECURITY: Additional security settings
+            # SECURITY: En iyi uygulama
             max_size=SECURITY_CONFIG['max_message_size'],
             max_queue=32
         )
